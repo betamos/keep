@@ -32,7 +32,6 @@ func init() {
 
 func main() {
 	// TODO: Inject encrypted magic number in order to reject bad passwords
-	// TOOD: Inject file header identifier to automatically detect if already encrypted
 	flag.Parse()
 	if flag.NArg() != 1 {
 		usage()
@@ -86,7 +85,7 @@ func main() {
 	}
 	if err = encryptOrDecrypt(d, passphrase, in, out, fileSize); err != nil {
 		task.Fail(err.Error())
-		log.Fatalln()
+		os.Exit(1)
 	}
 	task.Success(status)
 	if overwrite {

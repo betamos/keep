@@ -23,7 +23,7 @@ const (
 
 var signature = []byte{0xf5, 0x40, 0x12, 0xf1} // Try ...
 
-var ErrHmacMismatch = errors.New("HMAC mismatched")
+var ErrHmacMismatch = errors.New("HMAC mismatched. Wrong password?")
 
 // Looks for signature and advances reader past signature if so
 func readSignature(r *bufio.Reader) bool {
