@@ -7,7 +7,7 @@ import (
 	"crypto/rand"
 	"golang.org/x/crypto/sha3"
 	"io"
-	"os"
+	"reflect"
 )
 
 // Represents either encrypt or decrypt
@@ -18,46 +18,49 @@ const (
 	decrypt
 )
 
-func encryptOrDecrypt(d op, passphrase, infilePath, outfilePath string) error {
+var signature = []byte{0xf5, 0x40, 0x12, 0xf1} // Try ...
+
+// Looks for signature and advances reader past signature if so
+func readSignature(r *bufio.Reader) bool {
+	if b, err := r.Peek(4); err == nil && reflect.DeepEqual(b, signature) {
+		r.Discard(4)
+		return true
+	}
+	return false
+}
+
+// Writes file signature to buffer
+func writeSignature(w *bufio.Writer) error {
+	_, err := w.Write(signature)
+	return err
+}
+
+func encryptOrDecrypt(d op, passphrase string, in *bufio.Reader, out *bufio.Writer) error {
 	key := getKey(passphrase)
 	block, _ := aes.NewCipher(key)
 	iv := make([]byte, 16)
 
-	infile, err := os.Open(infilePath)
-	if err != nil {
-		return err
-	}
-	// In buffer
-	br := bufio.NewReader(infile)
-
-	outfile, err := os.Create(outfilePath)
-	if err != nil {
-		return err
-	}
-	// Out buffer
-	bw := bufio.NewWriter(outfile)
-
 	if d == encrypt {
 		rand.Read(iv)
 		keystream := cipher.NewCTR(block, iv)
-		bw.Write(iv) // according to protocol, write iv as first 16 bytes
+		out.Write(iv) // according to protocol, write iv as first 16 bytes
 
-		streamWriter := cipher.StreamWriter{S: keystream, W: bw}
-		if _, err := br.WriteTo(streamWriter); err != nil {
+		streamWriter := cipher.StreamWriter{S: keystream, W: out}
+		if _, err := in.WriteTo(streamWriter); err != nil {
 			return err
 		}
 	} else if d == decrypt {
-		if _, err := io.ReadFull(br, iv); err != nil {
+		if _, err := io.ReadFull(in, iv); err != nil {
 			return err
 		}
 		keystream := cipher.NewCTR(block, iv)
-		streamReader := cipher.StreamReader{S: keystream, R: br}
-		if _, err := bw.ReadFrom(streamReader); err != nil {
+		streamReader := cipher.StreamReader{S: keystream, R: in}
+		if _, err := out.ReadFrom(streamReader); err != nil {
 			return err
 		}
 	}
 
-	bw.Flush()
+	out.Flush()
 	return nil
 }
 

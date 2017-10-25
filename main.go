@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"github.com/betamos/clui"
@@ -8,7 +9,6 @@ import (
 	"golang.org/x/crypto/ssh/terminal"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"syscall"
 )
@@ -24,8 +24,6 @@ func usage() {
 
 func init() {
 	// TODO: Add -o for outfile
-	// TODO: Clever flags for enforcing mode when file names are not conventional?
-	// Or simply use the magic header to decide mode?
 	// flag.BoolVar(&encrypt, "encrypt", false, "Encrypt a file")
 	// flag.BoolVar(&decrypt, "decrypt", false, "Decrypt a file")
 	flag.BoolVar(&delete, "d", false, "Delete the original file")
@@ -36,45 +34,68 @@ func main() {
 	// TODO: Inject encrypted magic number in order to reject bad passwords
 	// TOOD: Inject file header identifier to automatically detect if already encrypted
 	flag.Parse()
-	if encrypt == decrypt || flag.NArg() != 1 {
+	if flag.NArg() != 1 {
 		usage()
 		os.Exit(2)
 	}
-	infile := flag.Arg(0)
-	if _, err := os.Stat(infile); os.IsNotExist(err) {
-		log.Fatalf("%v does not exist\n", infile)
+	var (
+		infilePath      = flag.Arg(0)
+		outfilePath     string
+		infile, outfile *os.File
+		in              *bufio.Reader
+		out             *bufio.Writer
+		d               op // encrypt or decrypt, change op to the var name
+		status          string
+		err             error
+	)
+	if infile, err = os.Open(infilePath); err != nil {
+		log.Fatalf("could not open %v: %v\n", infilePath, err)
 	}
-	outfile := infile + ".keep"
-	status := "encrypting"
-	d := encrypt
-	if filepath.Ext(infile) == ".keep" {
-		//mode = decrypt
-		outfile = strings.TrimSuffix(infile, ".keep")
-		status = "decrypting"
+	in = bufio.NewReader(infile)
+	if readSignature(in) { // encrypted file
 		d = decrypt
+		outfilePath = strings.TrimSuffix(infilePath, ".keep")
+		if outfilePath == infilePath {
+			outfilePath += ".unkeep" // TODO: Tmp file with prefix?
+		}
+		status = "decrypting"
+	} else {
+		d = encrypt
+		outfilePath = infilePath + ".keep"
+		status = "encrypting"
 	}
 	passphrase := promptPassphrase()
 
 	overwrite := true
-	if _, err := os.Stat(outfile); os.IsNotExist(err) {
+	if _, err := os.Stat(outfilePath); os.IsNotExist(err) {
 		overwrite = false
 	}
+
+	outfile, err = os.Create(outfilePath)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	// Out buffer
+	out = bufio.NewWriter(outfile)
 	task := clui.NewTask(status)
-	if err := encryptOrDecrypt(d, passphrase, infile, outfile); err != nil {
+	if d == encrypt {
+		writeSignature(out)
+	}
+	if err = encryptOrDecrypt(d, passphrase, in, out); err != nil {
 		task.Fail(err.Error())
 		log.Fatalln()
 	}
 	task.Success(status)
 	if overwrite {
-		color.Yellow("~ " + outfile)
+		color.Yellow("~ " + outfilePath)
 	} else {
-		color.Green("+ " + outfile)
+		color.Green("+ " + outfilePath)
 	}
 	if delete {
-		if err := os.Remove(infile); err != nil {
+		if err = os.Remove(infilePath); err != nil {
 			log.Fatalln(err)
 		}
-		color.Red("- " + infile)
+		color.Red("- " + infilePath)
 	}
 
 }
