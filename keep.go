@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"encoding/binary"
+	"errors"
 	"golang.org/x/crypto/sha3"
 	"io"
 	"reflect"
@@ -19,6 +22,8 @@ const (
 )
 
 var signature = []byte{0xf5, 0x40, 0x12, 0xf1} // Try ...
+
+var ErrHmacMismatch = errors.New("HMAC mismatched")
 
 // Looks for signature and advances reader past signature if so
 func readSignature(r *bufio.Reader) bool {
@@ -35,28 +40,51 @@ func writeSignature(w *bufio.Writer) error {
 	return err
 }
 
-func encryptOrDecrypt(d op, passphrase string, in *bufio.Reader, out *bufio.Writer) error {
+func encryptOrDecrypt(d op, passphrase string, in *bufio.Reader, out *bufio.Writer, fileSize int64) error {
 	key := getKey(passphrase)
 	block, _ := aes.NewCipher(key)
 	iv := make([]byte, 16)
 
+	h := hmac.New(sha3.New256, key)
 	if d == encrypt {
 		rand.Read(iv)
 		keystream := cipher.NewCTR(block, iv)
+		buf := make([]byte, binary.MaxVarintLen64)
+		l := binary.PutVarint(buf, fileSize)
+		out.Write(buf[0:l])
+
 		out.Write(iv) // according to protocol, write iv as first 16 bytes
 
 		streamWriter := cipher.StreamWriter{S: keystream, W: out}
-		if _, err := in.WriteTo(streamWriter); err != nil {
+		mw := io.MultiWriter(streamWriter, h) // hmac needs the data too
+		if _, err := in.WriteTo(mw); err != nil {
 			return err
 		}
+		out.Write(h.Sum(nil))
 	} else if d == decrypt {
-		if _, err := io.ReadFull(in, iv); err != nil {
+		var err error
+		if fileSize, err = binary.ReadVarint(in); err != nil {
+			return err
+		}
+		if _, err = io.ReadFull(in, iv); err != nil {
 			return err
 		}
 		keystream := cipher.NewCTR(block, iv)
-		streamReader := cipher.StreamReader{S: keystream, R: in}
-		if _, err := out.ReadFrom(streamReader); err != nil {
+		lr := io.LimitReader(in, fileSize)
+		streamReader := cipher.StreamReader{S: keystream, R: lr}
+
+		mw := io.MultiWriter(out, h) // hmac needs the data too
+		if _, err = io.Copy(mw, streamReader); err != nil {
 			return err
+		}
+		// hmac verification
+
+		givenHmac := make([]byte, 32)
+		if _, err = io.ReadFull(in, givenHmac); err != nil {
+			return err
+		}
+		if !hmac.Equal(h.Sum(nil), givenHmac) {
+			return ErrHmacMismatch
 		}
 	}
 

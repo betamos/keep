@@ -47,10 +47,13 @@ func main() {
 		d               op // encrypt or decrypt, change op to the var name
 		status          string
 		err             error
+		fileSize        int64
 	)
 	if infile, err = os.Open(infilePath); err != nil {
 		log.Fatalf("could not open %v: %v\n", infilePath, err)
 	}
+	stat, err := infile.Stat()
+	fileSize = stat.Size()
 	in = bufio.NewReader(infile)
 	if readSignature(in) { // encrypted file
 		d = decrypt
@@ -81,7 +84,7 @@ func main() {
 	if d == encrypt {
 		writeSignature(out)
 	}
-	if err = encryptOrDecrypt(d, passphrase, in, out); err != nil {
+	if err = encryptOrDecrypt(d, passphrase, in, out, fileSize); err != nil {
 		task.Fail(err.Error())
 		log.Fatalln()
 	}
